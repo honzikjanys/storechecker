@@ -72,7 +72,7 @@ The application creates:
 
 - `data/stores.db` - SQLite database with store data
 - `data/storechecker.log` - Detailed log file
-- `data/` - Email reports and artifacts
+- `data/reports/` - Excel files with store data and changes
 
 ### Email Report Contents
 
@@ -88,6 +88,22 @@ Each email includes:
    - Store counts by retailer and status
    - Timestamp of the report
 
+### Excel Reports
+
+After each run, the application generates Excel (.xlsx) files:
+
+- `prodejny_YYYYMMDD_HHMMSS.xlsx` - All stores in one file with color-coded status
+- `prodejny_podle_retezcu_YYYYMMDD_HHMMSS.xlsx` - Detailed report by retailer (separate sheets)
+- `zmeny_YYYYMMDD_HHMMSS.xlsx` - Only if changes detected (summary + detailed changes)
+
+**Excel file features**:
+- 📋 Formatted headers with blue background
+- 🎨 Color-coded status (Green=open, Yellow=temporarily closed, Red=permanently closed)
+- 📊 Auto-adjusted column widths for readability
+- 📅 Timestamp in filename for version tracking
+
+Files are saved to: `data/reports/`
+
 ## Project Structure
 
 ```
@@ -96,12 +112,13 @@ storechecker/
 │   ├── scrapers/          # Web scrapers for each retailer
 │   ├── database.py        # SQLite database manager
 │   ├── notifier.py        # Email notification system
+│   ├── excel_exporter.py  # Excel file generator
 │   └── scheduler.py       # APScheduler wrapper
 ├── main.py                # Main application entry point
 ├── config.example.py      # Configuration template
 ├── config.py              # Your configuration (gitignore)
 ├── requirements.txt       # Python dependencies
-├── data/                  # Database and log files
+├── data/                  # Database, logs, and reports
 └── README.md              # This file
 ```
 

@@ -23,6 +23,7 @@ from src.scrapers import (
 from src.database import StoreDatabase
 from src.notifier import EmailNotifier
 from src.scheduler import StoreCheckerScheduler
+from src.excel_exporter import ExcelExporter
 
 # Logging configuration
 logging.basicConfig(
@@ -68,6 +69,7 @@ class StoreChecker:
             password=self.config.SMTP_PASSWORD,
             from_email=self.config.EMAIL_FROM
         )
+        self.exporter = ExcelExporter(self.config.REPORTS_PATH)
         self.scheduler = StoreCheckerScheduler()
 
     def check_stores(self) -> None:
@@ -105,6 +107,31 @@ class StoreChecker:
                 logger.info(f"  - Temporarily closed: {len(changes['temporarily_closed'])}")
                 logger.info(f"  - Permanently closed: {len(changes['permanently_closed'])}")
                 logger.info(f"  - Reopened: {len(changes['reopened'])}")
+            
+            # Export to Excel files
+            logger.info("Generating Excel reports...")
+            all_stores = self.db.get_all_stores()
+            
+            if all_stores:
+                # Export all stores in one file
+                report_path = self.exporter.export_all_stores(all_stores, start_time)
+                logger.info(f"Excel report saved: {report_path}")
+                
+                # Export by retailer (one file with multiple sheets)
+                stores_by_retailer = {}
+                for store in all_stores:
+                    retailer = store['retailer']
+                    if retailer not in stores_by_retailer:
+                        stores_by_retailer[retailer] = []
+                    stores_by_retailer[retailer].append(store)
+                
+                retailer_report = self.exporter.export_by_retailer(stores_by_retailer, start_time)
+                logger.info(f"Excel retailer report saved: {list(retailer_report.values())[0]}")
+            
+            # Export changes if any detected
+            if total_changes > 0:
+                changes_report = self.exporter.export_changes(changes, start_time)
+                logger.info(f"Changes report saved: {changes_report}")
             
             # Send email notification
             logger.info("Sending email notification...")

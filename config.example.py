@@ -11,6 +11,7 @@ EMAIL_FROM = "storechecker@example.com"
 # Database
 DATABASE_PATH = "./data/stores.db"
 LOG_PATH = "./data/logs.log"
+REPORTS_PATH = "./data/reports"  # Excel reports directory
 
 # Web scraping
 REQUEST_TIMEOUT = 10
