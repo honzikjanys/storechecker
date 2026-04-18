@@ -1,62 +1,138 @@
 from typing import List
 from bs4 import BeautifulSoup
-from .base_scraper import BaseScraper, Store
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from .base_scraper import SeleniumScraper, Store
 import logging
+import time
+import json
 
 logger = logging.getLogger(__name__)
 
 
-class KauflandScraper(BaseScraper):
-    """Scraper for Kaufland Czech Republic"""
+class KauflandScraper(SeleniumScraper):
+    """Scraper for Kaufland Czech Republic using Selenium
+    
+    Kaufland uses dynamic store locator.
+    """
     
     BASE_URL = "https://www.kaufland.cz"
-    STORES_URL = "https://www.kaufland.cz/cs/nakupovani-v-kauflandu/nase-obchody"
+    STORES_URL = "https://www.kaufland.cz/cs/nase-obchody"
 
     def scrape(self) -> List[Store]:
-        """Scrape Kaufland stores"""
+        """Scrape Kaufland stores using Selenium"""
         try:
-            response = self.session.get(
-                self.STORES_URL,
-                timeout=self.timeout
+            driver = self._get_driver()
+            logger.info(f"Loading {self.STORES_URL}")
+            driver.get(self.STORES_URL)
+            
+            # Wait for page to load
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input, combobox, [role='combobox']"))
             )
-            response.raise_for_status()
+            
+            time.sleep(2)
+            
+            html = driver.page_source
+            soup = BeautifulSoup(html, 'html.parser')
             
             stores = []
-            soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Placeholder selectors - adjust based on actual website
-            store_items = soup.find_all('article', {'class': 'store-location'})
-            
-            for idx, item in enumerate(store_items, 1):
+            # Try JSON first
+            scripts = soup.find_all('script', {'type': 'application/json'})
+            for script in scripts:
                 try:
-                    store = self._parse_store_item(item, idx)
-                    if store:
-                        stores.append(store)
-                except Exception as e:
-                    logger.warning(f"Failed to parse Kaufland store item: {e}")
+                    data = json.loads(script.string)
+                    extracted = self._extract_from_json(data)
+                    if extracted:
+                        stores.extend(extracted)
+                except (json.JSONDecodeError, TypeError):
                     continue
+            
+            # Try HTML parsing if no JSON found
+            if not stores:
+                store_items = soup.find_all(['div', 'article', 'li'],
+                                           {'class': lambda x: x and any(cls in (x or '')
+                                           for cls in ['store', 'prodej', 'location', 'obchod'])})
+                
+                for idx, item in enumerate(store_items, 1):
+                    try:
+                        store = self._parse_store_item(item, idx)
+                        if store:
+                            stores.append(store)
+                    except Exception as e:
+                        logger.debug(f"Failed to parse Kaufland store item: {e}")
+                        continue
             
             logger.info(f"Scraped {len(stores)} Kaufland stores")
             return stores
             
         except Exception as e:
-            logger.error(f"Error scraping Kaufland stores: {e}")
+            logger.error(f"Error scraping Kaufland stores: {e}", exc_info=True)
             return []
 
-    def _parse_store_item(self, item, idx: int) -> Store:
-        """Parse individual store item"""
-        name = item.find('h3', {'class': 'store-title'})
-        city = item.find('span', {'class': 'store-city'})
-        address = item.find('div', {'class': 'store-address'})
-        status = item.find('div', {'class': 'status-badge'})
+    def _extract_from_json(self, data) -> List[Store]:
+        """Try to extract store data from JSON"""
+        stores = []
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key.lower() in ['stores', 'locations', 'prodejny', 'obchody']:
+                    if isinstance(value, list):
+                        for item in value:
+                            store = self._parse_json_store(item)
+                            if store:
+                                stores.append(store)
+                elif isinstance(value, (dict, list)):
+                    stores.extend(self._extract_from_json(value))
+        elif isinstance(data, list):
+            for item in data:
+                store = self._parse_json_store(item)
+                if store:
+                    stores.append(store)
+        return stores
+
+    def _parse_json_store(self, item) -> Store:
+        """Parse store from JSON object"""
+        if not isinstance(item, dict):
+            return None
         
-        return Store(
-            store_id=f"kaufland_{idx}",
-            name=name.text.strip() if name else "Unknown",
-            city=city.text.strip() if city else "Unknown",
-            address=address.text.strip() if address else "Unknown",
-            status=self._parse_status(status.text if status else "open")
-        )
+        try:
+            store_id = item.get('id') or item.get('store_id') or f"kaufland_{hash(str(item))}"
+            name = item.get('name') or item.get('title') or "Unknown"
+            city = item.get('city') or item.get('place') or "Unknown"
+            address = item.get('address') or item.get('street') or "Unknown"
+            status = item.get('status') or "open"
+            
+            return Store(
+                store_id=str(store_id),
+                name=str(name),
+                city=str(city),
+                address=str(address),
+                status=self._parse_status(str(status))
+            )
+        except Exception as e:
+            logger.debug(f"Failed to parse JSON store: {e}")
+            return None
+    
+    def _parse_store_item(self, item, idx: int) -> Store:
+        """Parse individual store item from HTML"""
+        try:
+            name = item.find(['h2', 'h3', 'h4', 'strong'])
+            city = item.find(['span', 'div'], {'class': lambda x: x and 'city' in x.lower()})
+            address = item.find(['span', 'p', 'div'], {'class': lambda x: x and 'address' in x.lower()})
+            status = item.find(['span', 'div'], {'class': lambda x: x and 'status' in x.lower()})
+            
+            return Store(
+                store_id=f"kaufland_{idx}",
+                name=name.text.strip() if name else "Unknown",
+                city=city.text.strip() if city else "Unknown",
+                address=address.text.strip() if address else "Unknown",
+                status=self._parse_status(status.text if status else "open")
+            )
+        except Exception as e:
+            logger.debug(f"Error parsing store item: {e}")
+            return None
     
     def _parse_status(self, status_text: str) -> str:
         """Parse status from HTML"""
